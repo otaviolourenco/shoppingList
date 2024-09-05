@@ -6,16 +6,36 @@
 //
 import SwiftUI
 
+enum PriceType: String, Codable {
+    case unit = "Unit"
+    case weight = "Weight"
+}
+
 struct Item: Identifiable, Equatable, Codable {
     let id: UUID
     var name: String
-    var price: Double
+    var priceType: PriceType
+    var unitPrice: Double
+    var quantity: Double
+    var weight: Double?
     var isSelected: Bool = false
     
-    init(id: UUID = UUID(), name: String, price: Double, isSelected: Bool = false) {
+    var totalPrice: Double {
+        switch priceType {
+        case .unit:
+            return unitPrice * quantity
+        case .weight:
+            return unitPrice * (weight ?? 0) / 1000 // Convert grams to kg
+        }
+    }
+    
+    init(id: UUID = UUID(), name: String, priceType: PriceType, unitPrice: Double, quantity: Double = 1, weight: Double? = nil, isSelected: Bool = false) {
         self.id = id
         self.name = name
-        self.price = price
+        self.priceType = priceType
+        self.unitPrice = unitPrice
+        self.quantity = quantity
+        self.weight = priceType == .weight ? weight : nil
         self.isSelected = isSelected
     }
 }
@@ -50,9 +70,9 @@ class ShoppingListViewModel: ObservableObject {
         saveLists()
     }
     
-    func addItem(to list: ShoppingList, name: String, price: Double) {
+    func addItem(to list: ShoppingList, item: Item) {
         if let index = shoppingLists.firstIndex(where: { $0.id == list.id }) {
-            shoppingLists[index].items.append(Item(name: name, price: price))
+            shoppingLists[index].items.append(item)
             saveLists()
         }
     }
@@ -89,7 +109,6 @@ class ShoppingListViewModel: ObservableObject {
 struct ContentView: View {
     @StateObject private var viewModel = ShoppingListViewModel()
     @State private var showingAddList = false
-    @State private var newListName = ""
     
     var body: some View {
         NavigationView {
@@ -119,16 +138,13 @@ struct ContentView: View {
 struct ListDetailView: View {
     @ObservedObject var viewModel: ShoppingListViewModel
     let list: ShoppingList
-    @State private var newItemName = ""
-    @State private var newItemPrice = ""
+    @State private var showingAddItem = false
     
     var body: some View {
         VStack {
             List {
-                ForEach(list.items) { item in
-                    ItemRow(item: item, onUpdate: { updatedItem in
-                        viewModel.updateItem(in: list, item: updatedItem)
-                    })
+                ForEach($viewModel.shoppingLists[viewModel.shoppingLists.firstIndex(where: { $0.id == list.id })!].items) { $item in
+                    ItemRow(viewModel: viewModel, list: list, item: $item)
                 }
                 .onDelete { offsets in
                     viewModel.deleteItem(from: list, at: offsets)
@@ -136,15 +152,7 @@ struct ListDetailView: View {
             }
             
             VStack {
-                HStack {
-                    TextField("Item name", text: $newItemName)
-                        .textFieldStyle(RoundedBorderTextFieldStyle())
-                    TextField("Price", text: $newItemPrice)
-                        .textFieldStyle(RoundedBorderTextFieldStyle())
-                        .keyboardType(.decimalPad)
-                }
-                
-                Button(action: addItem) {
+                Button(action: { showingAddItem = true }) {
                     Text("Add Item")
                         .frame(maxWidth: .infinity)
                         .padding()
@@ -152,7 +160,6 @@ struct ListDetailView: View {
                         .foregroundColor(.white)
                         .cornerRadius(10)
                 }
-                .disabled(newItemName.isEmpty || newItemPrice.isEmpty)
             }
             .padding()
             
@@ -167,54 +174,180 @@ struct ListDetailView: View {
             .cornerRadius(10)
         }
         .navigationTitle(list.name)
+        .sheet(isPresented: $showingAddItem) {
+            AddItemView(isPresented: $showingAddItem, viewModel: viewModel, list: list)
+        }
     }
     
     private var totalPrice: Double {
-        list.items.reduce(0) { $0 + $1.price }
+        list.items.reduce(0) { $0 + $1.totalPrice }
     }
     
     private var selectedItemsPrice: Double {
-        list.items.filter { $0.isSelected }.reduce(0) { $0 + $1.price }
+        list.items.filter { $0.isSelected }.reduce(0) { $0 + $1.totalPrice }
     }
-    
-    private func addItem() {
-        if let price = Double(newItemPrice.replacingOccurrences(of: ",", with: ".")) {
-            viewModel.addItem(to: list, name: newItemName, price: price)
-            newItemName = ""
-            newItemPrice = ""
+}
+
+struct EditItemView: View {
+    @Binding var isPresented: Bool
+    @ObservedObject var viewModel: ShoppingListViewModel
+    let list: ShoppingList
+    @Binding var item: Item
+    @State private var weightString: String
+
+    init(isPresented: Binding<Bool>, viewModel: ShoppingListViewModel, list: ShoppingList, item: Binding<Item>) {
+        self._isPresented = isPresented
+        self.viewModel = viewModel
+        self.list = list
+        self._item = item
+        self._weightString = State(initialValue: item.wrappedValue.weight.map { String($0) } ?? "")
+    }
+
+    var body: some View {
+        NavigationView {
+            Form {
+                TextField("Item Name", text: $item.name)
+
+                Picker("Price Type", selection: $item.priceType) {
+                    Text("Unit").tag(PriceType.unit)
+                    Text("Weight").tag(PriceType.weight)
+                }
+                .pickerStyle(SegmentedPickerStyle())
+
+                TextField("Unit Price", value: $item.unitPrice, format: .number)
+                    .keyboardType(.decimalPad)
+
+                if item.priceType == .unit {
+                    TextField("Quantity", value: $item.quantity, format: .number)
+                        .keyboardType(.numberPad)
+                } else {
+                    TextField("Weight (grams)", text: $weightString)
+                        .keyboardType(.numberPad)
+                }
+            }
+            .navigationTitle("Edit Item")
+            .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button("Cancel") {
+                        isPresented = false
+                    }
+                }
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button("Save") {
+                        if item.priceType == .unit {
+                            item.weight = nil
+                        } else {
+                            item.weight = Double(weightString)
+                        }
+                        viewModel.updateItem(in: list, item: item)
+                        isPresented = false
+                    }
+                }
+            }
         }
     }
 }
 
 struct ItemRow: View {
-    @State var item: Item
-    let onUpdate: (Item) -> Void
-    @State private var tempPrice: String = ""
-    
+    @ObservedObject var viewModel: ShoppingListViewModel
+    let list: ShoppingList
+    @Binding var item: Item
+    @State private var showingEditItem = false
+
     var body: some View {
         HStack {
-            TextField("Item name", text: $item.name, onCommit: updateItem)
-            Spacer()
-            TextField("Price", text: $tempPrice, onEditingChanged: { began in
-                if !began {
-                    updateItem()
+                Button(action: {
+                    showingEditItem = true
+                }) {
+                    VStack(alignment: .leading) {
+                        Text(item.name)
+                            .font(.headline)
+
+                        HStack {
+                            Text("Unit price: € \(item.unitPrice, specifier: "%.2f")")
+                            Spacer()
+                            if item.priceType == .unit {
+                                Text("Quantity: \(Int(item.quantity))")
+                            } else {
+                                Text("Weight: \(item.weight ?? 0, specifier: "%.0f")g")
+                            }
+                        }
+                        .font(.subheadline)
+
+                        Text("Total: € \(item.totalPrice, specifier: "%.2f")")
+                            .font(.subheadline)
+                            .foregroundColor(.blue)
+                    }
                 }
-            })
-            .onAppear {
-                tempPrice = String(format: "%.2f", item.price).replacingOccurrences(of: ".", with: ",")
-            }
-            .keyboardType(.decimalPad)
-            .frame(width: 70)
+                .buttonStyle(PlainButtonStyle())
+
+                Spacer()
+
             Toggle("", isOn: $item.isSelected)
-                .onChange(of: item.isSelected) { _, _ in updateItem() }
-        }
-    }
+                            .onChange(of: item.isSelected) { _, _ in
+                                viewModel.updateItem(in: list, item: item)
+                            }
+                    }
+                    .sheet(isPresented: $showingEditItem) {
+                        EditItemView(isPresented: $showingEditItem, viewModel: viewModel, list: list, item: $item)
+                    }
+                }
+            }
+
+struct AddItemView: View {
+    @Binding var isPresented: Bool
+    @ObservedObject var viewModel: ShoppingListViewModel
+    let list: ShoppingList
     
-    private func updateItem() {
-        if let newPrice = Double(tempPrice.replacingOccurrences(of: ",", with: ".")) {
-            item.price = newPrice
+    @State private var name = ""
+    @State private var priceType: PriceType = .unit
+    @State private var unitPrice = ""
+    @State private var quantity = "1"
+    @State private var weight = ""
+    
+    var body: some View {
+        NavigationView {
+            Form {
+                TextField("Item Name", text: $name)
+                
+                Picker("Price Type", selection: $priceType) {
+                    Text("Unit").tag(PriceType.unit)
+                    Text("Weight").tag(PriceType.weight)
+                }
+                .pickerStyle(SegmentedPickerStyle())
+                
+                TextField("Unit Price", text: $unitPrice)
+                    .keyboardType(.decimalPad)
+                
+                if priceType == .unit {
+                    TextField("Quantity", text: $quantity)
+                        .keyboardType(.numberPad)
+                } else {
+                    TextField("Weight (grams)", text: $weight)
+                        .keyboardType(.numberPad)
+                }
+            }
+            .navigationTitle("Add Item")
+            .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button("Cancel") {
+                        isPresented = false
+                    }
+                }
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button("Save") {
+                                            if let price = Double(unitPrice.replacingOccurrences(of: ",", with: ".")),
+                                               let qty = Double(quantity) {
+                                                let weightValue = priceType == .weight ? Double(weight) : nil
+                                                let newItem = Item(name: name, priceType: priceType, unitPrice: price, quantity: qty, weight: weightValue)
+                                                viewModel.addItem(to: list, item: newItem)
+                                                isPresented = false
+                                            }
+                                        }
+                    .disabled(name.isEmpty || unitPrice.isEmpty || (priceType == .unit && quantity.isEmpty) || (priceType == .weight && weight.isEmpty))
+                }
+            }
         }
-        onUpdate(item)
     }
 }
 
