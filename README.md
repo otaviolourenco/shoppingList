@@ -1,4 +1,3 @@
-
 # Listaroo
 
 **Listaroo** is a simple shopping list app developed using SwiftUI. This project was created as a personal learning exercise to explore iOS development concepts such as state management, data persistence, and UI customization. The project also marks a collaboration with the AI tool, ChatGPT, which assisted in implementing several features and resolving issues during development.
@@ -23,8 +22,9 @@
 
 
 ## Screenshots
+(Coming soon)
+![App Screenshot](https://via.placeholder.com/468x300?text=App+Screenshot+Here)
 
-(Comming soon)
 
 ## Installation
 
